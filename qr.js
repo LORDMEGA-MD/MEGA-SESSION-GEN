@@ -1,5 +1,5 @@
+// qr.js
 import express from "express";
-import http from "http";
 import { Server as IOServer } from "socket.io";
 import fs from "fs";
 import path from "path";
@@ -12,24 +12,27 @@ import {
   DisconnectReason,
 } from "@whiskeysockets/baileys";
 
-const app = express();
-const server = http.createServer(app);
-const io = new IOServer(server);
+const router = express.Router();
 const logger = Pino({ level: "info" });
 
-app.use(express.static("public"));
-
+let io; // socket.io instance
 let latestQr = null;
 let connectionStatus = "init";
 
-// Emit to clients
-io.on("connection", (socket) => {
-  logger.info("🖥️ Client connected to socket.io");
-  socket.emit("qr", latestQr);
-  socket.emit("status", connectionStatus);
-});
+// --- Attach socket.io from index.js ---
+export function setSocket(server) {
+  io = new IOServer(server);
 
-// Recursive buffer → base64 converter
+  io.on("connection", (socket) => {
+    logger.info("🖥️ Client connected to Socket.IO");
+    socket.emit("qr", latestQr);
+    socket.emit("status", connectionStatus);
+  });
+
+  startWhatsApp().catch((err) => logger.error(err));
+}
+
+// --- Utility: encode buffers for JSON ---
 function encodeBuffers(obj) {
   if (!obj || typeof obj !== "object") return obj;
   if (Buffer.isBuffer(obj)) return { type: "Buffer", data: obj.toString("base64") };
@@ -42,7 +45,7 @@ function encodeBuffers(obj) {
   return result;
 }
 
-// Validate that creds.json has required keys
+// --- Validate creds.json fields ---
 function validateCreds(creds) {
   const required = [
     "noiseKey",
@@ -56,13 +59,10 @@ function validateCreds(creds) {
     "myAppStateKeyId",
   ];
   const missing = required.filter((k) => !(k in creds));
-  return {
-    valid: missing.length === 0,
-    missing,
-  };
+  return { valid: missing.length === 0, missing };
 }
 
-// Delete only files in a folder
+// --- Empty folder ---
 function emptyFolder(folderPath) {
   if (!fs.existsSync(folderPath)) return;
   const files = fs.readdirSync(folderPath);
@@ -72,8 +72,12 @@ function emptyFolder(folderPath) {
   }
 }
 
+// --- Main WhatsApp logic ---
 async function startWhatsApp() {
-  const { state, saveCreds } = await useMultiFileAuthState("./src/session");
+  const sessionFolder = path.resolve("./src/session");
+  fs.mkdirSync(sessionFolder, { recursive: true });
+
+  const { state, saveCreds } = await useMultiFileAuthState(sessionFolder);
   const { version } = await fetchLatestBaileysVersion();
 
   const waSocket = makeWASocket({
@@ -125,24 +129,21 @@ async function startWhatsApp() {
         if (!state?.creds) return logger.warn("❌ state.creds not found — skipping save");
 
         state.creds.registered = true;
-
         const finalCreds = encodeBuffers(state.creds);
         const { valid, missing } = validateCreds(finalCreds);
         if (!valid) logger.warn(`⚠️ Missing fields in creds.json: ${missing.join(", ")}`);
 
-        // Write creds.json
-        const credsPath = path.resolve("./src/session/creds.json");
-        fs.mkdirSync(path.dirname(credsPath), { recursive: true });
+        // --- Save creds.json ---
+        const credsPath = path.join(sessionFolder, "creds.json");
         fs.writeFileSync(credsPath, JSON.stringify(finalCreds, null, 2), "utf8");
         logger.info("📦 Saved valid creds.json successfully.");
 
-        // Zip all session files
-        const zipPath = path.resolve("./src/session/Mega-MD-session.zip");
+        // --- Zip session folder ---
+        const zipPath = path.join(sessionFolder, "Mega-MD-session.zip");
         const output = fs.createWriteStream(zipPath);
         const archive = archiver("zip", { zlib: { level: 9 } });
-
         archive.pipe(output);
-        archive.directory("./src/session/", false);
+        archive.directory(sessionFolder, false);
         await archive.finalize();
         logger.info("🗜️ Session folder zipped successfully.");
 
@@ -157,13 +158,12 @@ async function startWhatsApp() {
             fileName: "Mega-MD-session.zip",
           });
 
-          // Send follow-up message with thumbnail, Telegram, WhatsApp
           const infoText = `> *ᴍᴇɢᴀ-ᴍᴅ ɪᴅ ᴏʙᴛᴀɪɴᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ.*
-📁ᴜᴘʟᴏᴀᴅ ᴛʜᴇ ᴢɪᴘ ғɪʟᴇ ᴘʀᴏᴠɪᴅᴇᴅ ɪɴ ʏᴏᴜʀ ғᴏʟᴅᴇʀ.
+📁 Upload the zip in your folder.
 
-_*Telegram:*_ t.me/LordMega0
-_*WhatsApp:*_ https://wa.me/256783991705
-> 🫩ʟᴀsᴛʟʏ, ᴅᴏ ɴᴏᴛ sʜᴀʀᴇ ʏᴏᴜʀ sᴇssɪᴏɴ ᴢɪᴘ ᴡɪᴛʜ ᴀɴʏᴏɴᴇ.`;
+Telegram: t.me/LordMega0
+WhatsApp: https://wa.me/256783991705
+Do not share with anyone.`;
 
           await waSocket.sendMessage(
             targetId,
@@ -171,8 +171,8 @@ _*WhatsApp:*_ https://wa.me/256783991705
               text: infoText,
               contextInfo: {
                 externalAdReply: {
-                  title: "Successfully Generated Session",
-                  body: "Mega-MD Session Generator 1",
+                  title: "Mega-MD Session Ready",
+                  body: "Session Generator",
                   thumbnailUrl: "https://files.catbox.moe/c29z2z.jpg",
                   sourceUrl: "https://wa.me/256783991705",
                   mediaType: 1,
@@ -184,23 +184,23 @@ _*WhatsApp:*_ https://wa.me/256783991705
             { quoted: sentDoc }
           );
 
-          // Empty session folder after sending zip
-          emptyFolder("./src/session");
-          logger.info("🗑️ Session folder emptied for new scans.");
+          // --- Clear session folder ---
+          emptyFolder(sessionFolder);
+          logger.info("🗑️ Session folder cleared.");
         });
       } catch (err) {
-        logger.error("❌ Error during creds/zip send:", err);
+        logger.error("❌ Error during session save/send:", err);
       }
     }
   });
 
+  // --- Ping response ---
   waSocket.ev.on("messages.upsert", async (m) => {
     const messages = m.messages || [];
     for (const msg of messages) {
       if (!msg.message || msg.key.fromMe) continue;
       const jid = msg.key.remoteJid;
       const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
-      logger.info(`📩 Message from ${jid}: ${text}`);
       if (text === "!ping") {
         await waSocket.sendMessage(jid, { text: "Pong from Mega-MD Web!" });
       }
@@ -208,7 +208,9 @@ _*WhatsApp:*_ https://wa.me/256783991705
   });
 }
 
-startWhatsApp().catch((err) => logger.error(err));
+// --- Router endpoint ---
+router.get("/", (req, res) => {
+  res.json({ status: "Mega-MD QR endpoint running" });
+});
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => logger.info(`🌐 Server running at http://localhost:${PORT}`));
+export default router;
