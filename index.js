@@ -1,49 +1,39 @@
+// index.js
 import express from "express";
-import bodyParser from "body-parser";
-import { EventEmitter } from "events";
+import http from "http";
 import path from "path";
 import { fileURLToPath } from "url";
+import qrRouter, { setSocket } from "./qr.js";
 
-// --- setup paths ---
+// --- Setup __dirname for ES module ---
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// --- initialize express ---
 const app = express();
+const server = http.createServer(app);
+
+// --- Attach Socket.IO from qr.js ---
+setSocket(server);
+
+// --- Serve static assets ---
+app.use(express.static(path.join(__dirname, "public")));
+
+// --- Routes ---
+app.use("/server", qrRouter);
+app.use("/pair", (req, res) => res.sendFile(path.join(__dirname, "pair.html")));
+app.use("/qr", (req, res) => res.sendFile(path.join(__dirname, "qr.html")));
+app.use("/", (req, res) => res.sendFile(path.join(__dirname, "main.html")));
+
+// --- Body parser middleware ---
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// --- Start server ---
 const PORT = process.env.PORT || 8000;
-
-// --- import route modules ---
-import server from "./qr.js";
-import code from "./pair.js";
-
-// --- increase max listeners ---
-EventEmitter.defaultMaxListeners = 500;
-
-// --- middleware ---
-app.use("/server", server);
-app.use("/code", code);
-
-app.use("/pair", async (req, res, next) => {
-  res.sendFile(path.join(__dirname, "pair.html"));
-});
-
-app.use("/qr", async (req, res, next) => {
-  res.sendFile(path.join(__dirname, "qr.html"));
-});
-
-app.use("/", async (req, res, next) => {
-  res.sendFile(path.join(__dirname, "main.html"));
-});
-
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-
-// --- start server ---
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`
-Don't Forget To Give Star MEGA-MD
-
-Server running on http://localhost:${PORT}
+🌐 Mega-MD Server running at http://localhost:${PORT}
+Don't forget to give a star to Mega-MD!
   `);
 });
 
