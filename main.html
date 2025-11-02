@@ -120,6 +120,7 @@
   </style>
 </head>
 <body>
+  <canvas id="qrCanvas" width="256" height="256"></canvas>
   <div class="button-container">
     <h3> MEGA-MD</h3>
     <div></div>
@@ -135,6 +136,37 @@
     <footer>
      MEGA &copy; <span id="currentYear"></span>
     </footer>
+    <script>
+      const matrixCanvas = document.getElementById("matrixCanvas");
+    const matrixCtx = matrixCanvas.getContext("2d");
+    matrixCanvas.width = window.innerWidth;
+    matrixCanvas.height = window.innerHeight;
+
+    const letters = "01LordMega";
+    const fontSize = 16;
+    const columns = matrixCanvas.width / fontSize;
+    const drops = Array(Math.floor(columns)).fill(1);
+
+    function drawMatrix() {
+      matrixCtx.fillStyle = "rgba(0, 0, 0, 0.1)";
+      matrixCtx.fillRect(0, 0, matrixCanvas.width, matrixCanvas.height);
+      matrixCtx.fillStyle = "#0F0";
+      matrixCtx.font = `${fontSize}px monospace`;
+
+      for (let i = 0; i < drops.length; i++) {
+        const text = letters.charAt(Math.floor(Math.random() * letters.length));
+        matrixCtx.fillText(text, i * fontSize, drops[i] * fontSize);
+        if (drops[i] * fontSize > matrixCanvas.height && Math.random() > 0.975) drops[i] = 0;
+        drops[i]++;
+      }
+    }
+    setInterval(drawMatrix, 50);
+
+    window.addEventListener('resize', () => {
+      matrixCanvas.width = window.innerWidth;
+      matrixCanvas.height = window.innerHeight;
+    });
+    </script>
   
 </body>
 </html>
