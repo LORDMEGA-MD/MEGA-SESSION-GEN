@@ -1,0 +1,40 @@
+{
+  "name": "mega-md-qr",
+  "version": "2.0.0",
+  "description": "A powerful WhatsApp bot and QR session generator built on Baileys",
+  "type": "module",
+  "main": "./index.js",
+  "engines": {
+    "npm": ">=9.7.2",
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node ./index.js",
+    "dev": "nodemon ./index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.8.0",
+    "express": "^4.18.2",
+    "body-parser": "^1.20.2",
+    "pino": "^8.17.0",
+    "qrcode": "^1.5.3",
+    "qrcode-terminal": "^0.12.0",
+    "socket.io": "^4.7.1",
+    "awesome-phonenumber": "^2.64.0",
+    "phone": "^3.1.32",
+    "archiver": "^7.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  },
+  "keywords": [
+    "whatsapp",
+    "baileys",
+    "bot",
+    "session-generator",
+    "qr",
+    "express"
+  ],
+  "license": "MIT",
+  "author": "Mega MD Developers"
+}
