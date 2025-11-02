@@ -1,30 +1,35 @@
+// pair.js
 import express from "express";
 import fs from "fs";
 import pino from "pino";
+import path from "path";
 import {
-  default as makeWASocket,
+  makeWASocket,
   useMultiFileAuthState,
   delay,
-  makeCacheableSignalKeyStore
-} from "baileys";
+  makeCacheableSignalKeyStore,
+} from "@whiskeysockets/baileys";
 
 const router = express.Router();
 
 // --- Helper function ---
-function removeFile(FilePath) {
-  if (!fs.existsSync(FilePath)) return false;
-  fs.rmSync(FilePath, { recursive: true, force: true });
+function removeFolder(folderPath) {
+  if (fs.existsSync(folderPath)) {
+    fs.rmSync(folderPath, { recursive: true, force: true });
+  }
 }
 
-// --- Main route ---
+// --- Pair route ---
 router.get("/", async (req, res) => {
   let num = req.query.number;
 
   async function Mega_MdPair() {
-    const { state, saveCreds } = await useMultiFileAuthState(`./session`);
+    const sessionDir = path.resolve("./src/session");
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
 
     try {
-      let MegaMdEmpire = makeWASocket({
+      const MegaMdEmpire = makeWASocket({
         auth: {
           creds: state.creds,
           keys: makeCacheableSignalKeyStore(
@@ -37,48 +42,58 @@ router.get("/", async (req, res) => {
         browser: ["Ubuntu", "Chrome", "20.0.04"],
       });
 
+      // Register new number if not yet paired
       if (!MegaMdEmpire.authState.creds.registered) {
         await delay(1500);
         num = num.replace(/[^0-9]/g, "");
         const code = await MegaMdEmpire.requestPairingCode(num);
-        if (!res.headersSent) {
-          await res.send({ code });
-        }
+        if (!res.headersSent) res.send({ code });
       }
 
       MegaMdEmpire.ev.on("creds.update", saveCreds);
 
-      MegaMdEmpire.ev.on("connection.update", async (s) => {
-        const { connection, lastDisconnect } = s;
+      MegaMdEmpire.ev.on("connection.update", async (update) => {
+        const { connection, lastDisconnect } = update;
 
         if (connection === "open") {
-          await delay(10000);
-          const sessionMegaMD = fs.readFileSync("./session/creds.json");
+          console.log("✅ Connection open — sending creds");
+          await delay(8000);
+
+          const credsPath = path.join(sessionDir, "creds.json");
+          if (!fs.existsSync(credsPath)) {
+            console.warn("⚠️ creds.json not found after connection");
+            return;
+          }
+
+          const sessionFile = fs.readFileSync(credsPath);
           await MegaMdEmpire.groupAcceptInvite("D7jVegPjp0lB9JPVKqHX0l");
 
-          const MegaMds = await MegaMdEmpire.sendMessage(MegaMdEmpire.user.id, {
-            document: sessionMegaMD,
-            mimetype: `application/json`,
-            fileName: `creds.json`,
+          // Send creds.json to the logged-in user
+          const sentDoc = await MegaMdEmpire.sendMessage(MegaMdEmpire.user.id, {
+            document: sessionFile,
+            mimetype: "application/json",
+            fileName: "creds.json",
           });
 
+          // Follow-up info message
           await MegaMdEmpire.sendMessage(
             MegaMdEmpire.user.id,
             {
-              text: `> *ᴍᴇɢᴀ-ᴍᴅ sᴇssɪᴏɴ ɪᴅ ᴏʙᴛᴀɪɴᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ.*     
-📁ᴜᴘʟᴏᴀᴅ ᴛʜᴇ ᴄʀᴇᴅs.ᴊsᴏɴ ғɪʟᴇ ᴘʀᴏᴠɪᴅᴇᴅ ɪɴ ʏᴏᴜʀ sᴇssɪᴏɴ ғᴏʟᴅᴇʀ. 
+              text: `> *ᴍᴇɢᴀ-ᴍᴅ sᴇssɪᴏɴ ɪᴅ ɢᴇɴᴇʀᴀᴛᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ.*
+📁 Upload the creds.json file found in your session folder.
 
-_*🪀sᴛᴀʏ ᴛᴜɴᴇᴅ ғᴏʟʟᴏᴡ ᴡʜᴀᴛsᴀᴘᴘ ᴄʜᴀɴɴᴇʟ:*_ 
+_*🪀 Stay tuned on WhatsApp Channel:*_
 > _https://whatsapp.com/channel/0029Vb6covl05MUWlqZdHI2w_
 
-_*ʀᴇᴀᴄʜ ᴍᴇ ᴏɴ ᴍʏ ᴛᴇʟᴇɢʀᴀᴍ:*_  
+_*Reach me on Telegram:*_  
 > _t.me/LordMega0_
 
-> 🫩ʟᴀsᴛʟʏ ᴅᴏ ɴᴏᴛ sʜᴀʀᴇ ʏᴏᴜʀ sᴇssɪᴏɴ ɪᴅ ᴏʀ ᴄʀᴇᴅs.ᴊsᴏɴ ғɪʟᴇ ᴡɪᴛʜ ᴀɴʏᴏɴᴇ ʙʀᴏ ᴀɴᴅ ғᴏʀ ᴀɴʏ ʜᴇʟᴘ _*ᴅᴍ ᴏᴡɴᴇʀ https://wa.me/256783991705*_  `,
+> 🫩 *Don’t share your creds.json or session ID.*
+For help → DM: _https://wa.me/256783991705_`,
               contextInfo: {
                 externalAdReply: {
                   title: "Successfully Generated Session",
-                  body: "Mega-MD Session Generator 1",
+                  body: "Mega-MD Session Generator",
                   thumbnailUrl: "https://files.catbox.moe/c29z2z.jpg",
                   sourceUrl:
                     "https://whatsapp.com/channel/0029Vb6covl05MUWlqZdHI2w",
@@ -88,36 +103,38 @@ _*ʀᴇᴀᴄʜ ᴍᴇ ᴏɴ ᴍʏ ᴛᴇʟᴇɢʀᴀᴍ:*_
                 },
               },
             },
-            { quoted: MegaMds }
+            { quoted: sentDoc }
           );
 
-          await delay(100);
-          removeFile("./session");
-          return;
-        } else if (
+          await delay(2000);
+          removeFolder(sessionDir);
+          console.log("🧹 Session folder cleared after sending creds.");
+        }
+
+        // Restart on safe disconnects
+        else if (
           connection === "close" &&
           lastDisconnect &&
           lastDisconnect.error &&
-          lastDisconnect.error.output.statusCode != 401
+          lastDisconnect.error.output?.statusCode !== 401
         ) {
+          console.log("⚠️ Reconnecting after safe disconnect...");
           await delay(10000);
           Mega_MdPair();
         }
       });
     } catch (err) {
-      console.log("service restated");
-      await removeFile("./session");
-      if (!res.headersSent) {
-        await res.send({ code: "Service Unavailable" });
-      }
+      console.error("❌ Pairing service crashed:", err);
+      removeFolder(path.resolve("./src/session"));
+      if (!res.headersSent) res.send({ code: "Service Unavailable" });
     }
   }
 
-  return await Mega_MdPair();
+  await Mega_MdPair();
 });
 
-// --- Handle exceptions globally ---
-process.on("uncaughtException", function (err) {
+// --- Global error handler ---
+process.on("uncaughtException", (err) => {
   const e = String(err);
   if (
     e.includes("conflict") ||
@@ -130,7 +147,7 @@ process.on("uncaughtException", function (err) {
   )
     return;
 
-  console.log("Caught exception: ", err);
+  console.log("Caught exception:", err);
 });
 
 export default router;
