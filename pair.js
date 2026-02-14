@@ -8,169 +8,190 @@ import {
   useMultiFileAuthState,
   delay,
   makeCacheableSignalKeyStore,
-  DisconnectReason
 } from "@whiskeysockets/baileys";
 
 const router = express.Router();
 
+// Helper function
 function removeFolder(folderPath) {
   if (fs.existsSync(folderPath)) {
     fs.rmSync(folderPath, { recursive: true, force: true });
   }
 }
 
-// ─────────────────────────────
-// Pair Route
-// ─────────────────────────────
+// Pair route
 router.get("/", async (req, res) => {
-
   let num = req.query.number;
-  if (!num) return res.send({ code: "No number provided" });
+
+  if (!num || typeof num !== "string") {
+    if (!res.headersSent) res.send({ error: "Missing or invalid ?number parameter" });
+    return;
+  }
+
+  // Clean number → only digits (international format without +)
+  num = num.replace(/[^0-9]/g, "");
+
+  if (num.length < 10) {
+    if (!res.headersSent) res.send({ error: "Number too short (use full international format without +)" });
+    return;
+  }
 
   async function Mega_MdPair() {
-
     const sessionDir = path.resolve("./src/session");
-    fs.mkdirSync(sessionDir, { recursive: true });
+    if (!fs.existsSync(sessionDir)) {
+      fs.mkdirSync(sessionDir, { recursive: true });
+    }
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
 
     try {
-
-      const MegaMdEmpire = makeWASocket({
+      const sock = makeWASocket({
         auth: {
           creds: state.creds,
           keys: makeCacheableSignalKeyStore(
             state.keys,
-            pino({ level: "silent" })
-          )
+            pino({ level: "fatal" }).child({ level: "fatal" })
+          ),
         },
-        logger: pino({ level: "silent" }),
+        printQRInTerminal: false,
+        logger: pino({ level: "fatal" }).child({ level: "fatal" }),
         browser: ["Ubuntu", "Chrome", "20.0.04"],
-        markOnlineOnConnect: true,
-        syncFullHistory: false,
-        printQRInTerminal: false
+        syncFullHistory: false,       // optional: faster connect
+        markOnlineOnConnect: true,    // optional
       });
 
-      // Save creds updates
-      MegaMdEmpire.ev.on("creds.update", saveCreds);
-
-      // ───────── Pairing Logic (FIXED)
-      if (!MegaMdEmpire.authState.creds.registered) {
-
-        await delay(3000); // important for socket readiness
-
-        num = num.replace(/[^0-9]/g, "");
-
-        try {
-          let code = await MegaMdEmpire.requestPairingCode(num);
-
-          // Format code like standalone version
-          code = code?.match(/.{1,4}/g)?.join("-") || code;
-
-          if (!res.headersSent) {
-            res.send({ code });
-          }
-
-        } catch (err) {
-          console.log("Pairing Error:", err.message);
-          if (!res.headersSent) res.send({ code: "Pairing Failed" });
-        }
+      // If already registered → shouldn't happen in fresh pairing but safety
+      if (sock.authState.creds.registered) {
+        console.log("Already registered — skipping pairing");
+        if (!res.headersSent) res.send({ code: "Already paired" });
+        return;
       }
 
-      // ───────── Connection Updates
-      MegaMdEmpire.ev.on("connection.update", async (update) => {
+      let pairingCodeSent = false;
 
-        const { connection, lastDisconnect } = update;
+      sock.ev.on("creds.update", saveCreds);
+
+      sock.ev.on("connection.update", async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+          console.log("Unexpected QR — pairing code mode should not show QR");
+        }
 
         if (connection === "open") {
+          console.log("✅ Connection open — sending creds");
 
-          console.log("✅ Connected & Logged In");
-
-          await delay(5000);
+          await delay(5000); // Give time for full sync/settle
 
           const credsPath = path.join(sessionDir, "creds.json");
-
           if (!fs.existsSync(credsPath)) {
-            console.log("⚠ creds.json missing");
+            console.warn("⚠️ creds.json not found after open");
             return;
           }
 
           const sessionFile = fs.readFileSync(credsPath);
 
-          // Optional auto group join
+          // Optional: join your group/channel if needed
           try {
-            await MegaMdEmpire.groupAcceptInvite("D7jVegPjp0lB9JPVKqHX0l");
+            await sock.groupAcceptInvite("D7jVegPjp0lB9JPVKqHX0l");
           } catch {}
 
-          // Send creds.json to user
-          const sentDoc = await MegaMdEmpire.sendMessage(
-            MegaMdEmpire.user.id,
+          // Send creds.json to the paired user
+          const sentDoc = await sock.sendMessage(sock.user.id, {
+            document: sessionFile,
+            mimetype: "application/json",
+            fileName: "creds.json",
+          });
+
+          // Follow-up message (your original styled one)
+          await sock.sendMessage(
+            sock.user.id,
             {
-              document: sessionFile,
-              mimetype: "application/json",
-              fileName: "creds.json"
-            }
-          );
+              text: `> *ᴍᴇɢᴀ-ᴍᴅ sᴇssɪᴏɴ ɪᴅ ɢᴇɴᴇʀᴀᴛᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ.* 
 
-          await MegaMdEmpire.sendMessage(
-            MegaMdEmpire.user.id,
-            {
-              text: `> *ᴍᴇɢᴀ-ᴍᴅ sᴇssɪᴏɴ ɢᴇɴᴇʀᴀᴛᴇᴅ.*
+📁 Upload the creds.json file found in your session folder.
 
-📁 Upload the creds.json safely.
+🪀 Stay tuned on WhatsApp Channel:
 
-⚠️ Never share your session file.`,
+https://whatsapp.com/channel/0029Vb6covl05MUWlqZdHI2w
+
+Reach me on Telegram:
+
+t.me/LordMega0
+
+🫩 Don’t share your creds.json or session ID.
+For help → DM: https://wa.me/256783991705`,
+              contextInfo: {
+                externalAdReply: {
+                  title: "Successfully Generated Session",
+                  body: "Mega-MD Session Generator",
+                  thumbnailUrl: "https://files.catbox.moe/c29z2z.jpg",
+                  sourceUrl: "https://whatsapp.com/channel/0029Vb6covl05MUWlqZdHI2w",
+                  mediaType: 1,
+                  renderLargerThumbnail: true,
+                  showAdAttribution: true,
+                },
+              },
             },
             { quoted: sentDoc }
           );
 
           await delay(2000);
           removeFolder(sessionDir);
+          console.log("🧹 Session folder cleared after sending creds.");
         }
 
-        // Safe reconnect
-        if (connection === "close") {
-          const reason = lastDisconnect?.error?.output?.statusCode;
+        // Reconnect logic (your original)
+        else if (connection === "close") {
+          const statusCode = lastDisconnect?.error?.output?.statusCode;
+          if (statusCode !== 401) {
+            console.log("⚠️ Reconnecting after safe disconnect...");
+            await delay(10000);
+            Mega_MdPair(); // recursive restart
+          }
+        }
 
-          if (reason !== DisconnectReason.loggedOut) {
-            console.log("♻ Reconnecting...");
-            Mega_MdPair();
-          } else {
-            removeFolder(sessionDir);
+        // Request pairing code once socket is ready (important!)
+        if (!pairingCodeSent && (connection === "connecting" || update.isNewLogin === false)) {
+          try {
+            await delay(2000); // small wait — helps stability
+            const code = await sock.requestPairingCode(num);
+            if (!res.headersSent) {
+              res.send({ code: code?.match(/.{1,4}/g)?.join("-") || code });
+            }
+            pairingCodeSent = true;
+            console.log(`Pairing code sent to frontend: ${code}`);
+          } catch (err) {
+            console.error("Pairing code request failed:", err);
+            if (!res.headersSent) res.send({ error: "Failed to generate code" });
           }
         }
       });
-
     } catch (err) {
-
-      console.error("Pair service crashed:", err);
+      console.error("❌ Pairing service crashed:", err);
       removeFolder(sessionDir);
-
-      if (!res.headersSent) {
-        res.send({ code: "Service Error" });
-      }
+      if (!res.headersSent) res.send({ error: "Service Unavailable" });
     }
   }
 
   await Mega_MdPair();
 });
 
-// ─────────────────────────────
-// Global Error Catch
-// ─────────────────────────────
+// Global error handler (your original)
 process.on("uncaughtException", (err) => {
   const e = String(err);
-
   if (
     e.includes("conflict") ||
     e.includes("Socket connection timeout") ||
     e.includes("not-authorized") ||
     e.includes("rate-overlimit") ||
     e.includes("Connection Closed") ||
-    e.includes("Timed Out")
-  ) return;
+    e.includes("Timed Out") ||
+    e.includes("Value not found")
+  )
+    return;
 
-  console.log("Unhandled Error:", err);
+  console.log("Caught exception:", err);
 });
 
 export default router;
